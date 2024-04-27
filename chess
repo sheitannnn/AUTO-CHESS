@@ -1,0 +1,27 @@
+from selenium import webdriver
+import time
+
+# Open multiple tabs and play chess on each tab
+num_tabs = 3  # Number of tabs to open
+game_url = "https://www.chess.com/play/online"
+
+# Open the main browser window
+driver = webdriver.Chrome()
+
+# Open multiple tabs and play chess
+for i in range(num_tabs):
+    driver.execute_script("window.open('" + game_url + "');")
+    time.sleep(2)  # Wait for the new tab to open
+    driver.switch_to.window(driver.window_handles[i + 1])  # Switch to the new tab
+
+# Simulate playing chess on each tab
+for tab in range(1, num_tabs + 1):
+    driver.switch_to.window(driver.window_handles[tab])
+    driver.find_element_by_css_selector(".new_game_button").click()
+    time.sleep(2)  # Wait for the new game to start
+    driver.find_element_by_css_selector(".live_chat_input").send_keys("Hello! Let's play chess.")
+    driver.find_element_by_css_selector(".live_chat_send").click()
+    time.sleep(2)  # Wait for the message to be sent
+
+# Close the browser window
+driver.quit()
