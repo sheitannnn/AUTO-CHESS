@@ -1,3 +1,12 @@
+ORCHESTRATOR_NEXT_STEP_PROMPT = """
+Review the user's request, your current plan, and any previous results. 
+Determine the next action.
+"""
+
+
+
+
+
 """Implements a file-based long-term memory system."""
 import json
 import os
