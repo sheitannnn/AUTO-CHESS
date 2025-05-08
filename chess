@@ -1,27 +1,107 @@
-from selenium import webdriver
-import time
+"""Implements a file-based long-term memory system."""
+import json
+import os
+from typing import Any, List, Dict
 
-# Open multiple tabs and play chess on each tab
-num_tabs = 3  # Number of tabs to open
-game_url = "https://www.chess.com/play/online"
+from app.config import config
+from app.logger import logger
+from app.memory.base import LongTermMemoryBase
 
-# Open the main browser window
-driver = webdriver.Chrome()
+DEFAULT_MEMORY_FILE = "long_term_memory.json"
 
-# Open multiple tabs and play chess
-for i in range(num_tabs):
-    driver.execute_script("window.open('" + game_url + "');")
-    time.sleep(2)  # Wait for the new tab to open
-    driver.switch_to.window(driver.window_handles[i + 1])  # Switch to the new tab
+class FileBasedLongTermMemory(LongTermMemoryBase):
+    """A simple file-based long-term memory system that stores memories in a JSON file."""
 
-# Simulate playing chess on each tab
-for tab in range(1, num_tabs + 1):
-    driver.switch_to.window(driver.window_handles[tab])
-    driver.find_element_by_css_selector(".new_game_button").click()
-    time.sleep(2)  # Wait for the new game to start
-    driver.find_element_by_css_selector(".live_chat_input").send_keys("Hello! Let's play chess.")
-    driver.find_element_by_css_selector(".live_chat_send").click()
-    time.sleep(2)  # Wait for the message to be sent
+    def __init__(
+        self, 
+        workspace_root: str = None, 
+        memory_file_name: str = DEFAULT_MEMORY_FILE,
+        ie_name: str = None  # New optional parameter added here
+    ):
+        """
+        Args:
+            workspace_root: Root directory for memory storage
+            memory_file_name: Name of the memory JSON file
+            ie_name: Optional identifier for the memory instance
+        """
+        self.workspace_root = workspace_root or config.workspace_root
+        self.memory_file_path = os.path.join(self.workspace_root, "memory", memory_file_name)
+        self.ie_name = ie_name  # Store the optional identifier
+        self._ensure_memory_dir_exists()
+        self.memory_data: Dict[str, List[Dict[str, Any]]] = self._load_memory_from_file()
 
-# Close the browser window
-driver.quit()
+    def _ensure_memory_dir_exists(self) -> None:
+        """Ensures the directory for storing memory files exists."""
+        memory_dir = os.path.dirname(self.memory_file_path)
+        if not os.path.exists(memory_dir):
+            os.makedirs(memory_dir, exist_ok=True)
+            logger.info(f"Created memory directory: {memory_dir}")
+
+    def _load_memory_from_file(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Loads memory data from the JSON file."""
+        if not os.path.exists(self.memory_file_path):
+            logger.info(f"Memory file not found at {self.memory_file_path}. Initializing empty memory.")
+            return {}
+        try:
+            with open(self.memory_file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                logger.info(f"Successfully loaded memory from {self.memory_file_path}")
+                return data
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Error loading memory from {self.memory_file_path}: {e}. Initializing empty memory.")
+            return {}
+
+    def _save_memory_to_file(self) -> None:
+        """Saves the current memory data to the JSON file."""
+        try:
+            with open(self.memory_file_path, "w", encoding="utf-8") as f:
+                json.dump(self.memory_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Successfully saved memory to {self.memory_file_path}")
+        except IOError as e:
+            logger.error(f"Error saving memory to {self.memory_file_path}: {e}")
+
+    async def add_memory(self, memory_item: Dict[str, Any], category: str = "general") -> None:
+        """Adds an item to the long-term memory under a specific category."""
+        if category not in self.memory_data:
+            self.memory_data[category] = []
+        self.memory_data[category].append(memory_item)
+        self._save_memory_to_file()
+        logger.info(f"Added memory item to category '{category}': {memory_item.get('summary', 'No summary')}")
+
+    async def retrieve_memories(self, query: str, category: str = "general", top_k: int = 5) -> List[Dict[str, Any]]:
+        """Retrieves relevant memories based on a simple keyword query from a specific category."""
+        if category not in self.memory_data:
+            logger.warning(f"Category '{category}' not found in memory.")
+            return []
+
+        relevant_memories = []
+        query_terms = query.lower().split()
+
+        for item in self.memory_data[category]:
+            content_to_search = ""
+            if "content" in item and isinstance(item["content"], str):
+                content_to_search += item["content"].lower()
+            if "summary" in item and isinstance(item["summary"], str):
+                content_to_search += " " + item["summary"].lower()
+            
+            if any(term in content_to_search for term in query_terms):
+                relevant_memories.append(item)
+        
+        retrieved = relevant_memories[-top_k:]
+        logger.info(f"Retrieved {len(retrieved)} memories for query '{query}' from category '{category}'.")
+        return retrieved
+
+    async def clear_category(self, category: str = "general") -> None:
+        """Clears all memories from a specific category."""
+        if category in self.memory_data:
+            del self.memory_data[category]
+            self._save_memory_to_file()
+            logger.info(f"Cleared all memories from category '{category}'.")
+        else:
+            logger.warning(f"Category '{category}' not found in memory. Nothing to clear.")
+
+    async def clear_all_memory(self) -> None:
+        """Clears all long-term memory."""
+        self.memory_data = {}
+        self._save_memory_to_file()
+        logger.info("Cleared all long-term memory.")
