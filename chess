@@ -1,116 +1,234 @@
-ORCHESTRATOR_NEXT_STEP_PROMPT = """
-Review the user's request, your current plan, and any previous results. 
-Determine the next action.
-"""
-
-
-ORCHESTRATOR_NEXT_STEP_PROMPT = """Review the user's request, your current plan, and any previous results. Determine the next action."""
-
-
-"""Implements a file-based long-term memory system."""
-import json
+# Corrected Python script for OpenManus project
+import asyncio
+import queue
 import os
-from typing import Any, List, Dict
+from typing import Dict, List, Optional, Any, Type
+from pydantic import BaseModel, Field
+from datetime import datetime # Ensure datetime is imported
 
-from app.config import config
-from app.logger import logger
-from app.memory.base import LongTermMemoryBase
+# Define global constants before they are used
+ORCHESTRATOR_SYSTEM_PROMPT = (
+    "You are the Orchestrator Agent for the OpenManus project. "
+    "Your primary role is to understand complex user requests, decompose them into manageable sub-tasks, "
+    "develop a coherent, step-by-step plan, and delegate these sub-tasks to specialized agents. "
+    "You must manage the overall workflow, synthesize results from specialized agents, and present the final solution."
+    "Key principles for your operation:"
+    "1. **Decomposition & Planning:** Break down complex goals. Clearly outline your plan. For each step, decide if you will perform it or delegate it."
+    "2. **Delegation:** If delegating, clearly define the sub-task and provide all necessary context. Use the `delegate_task_to_specialist` tool. Specify the `agent_role` (e.g., \"BrainstormingAgent\", \"CodingAgent\", \"WebSearchAgent\") and the `sub_task_prompt`."
+    "3. **Synthesis:** Combine outputs from specialized agents and your own work into a cohesive final result."
+    "4. **State Management:** Maintain awareness of the overall task progress and the status of sub-tasks."
+    "5. **Error Handling:** If a specialized agent fails or returns an unsatisfactory result, re-evaluate your plan, re-delegate, or try an alternative approach."
+    "The initial working directory is: {directory}."
+)
 
-DEFAULT_MEMORY_FILE = "long_term_memory.json"
+ORCHESTRATOR_NEXT_STEP_PROMPT = """Review the user's current request, your current plan, and any previous results. Determine the next action.
+1. **Current Goal:** Briefly state the overall user goal.
+2. **Current Plan Step:** What is the current step in your plan?
+3. **Action Choice:** Will you perform this step yourself or delegate it?
+   - If performing yourself: Select an appropriate tool from your own toolset.
+   - If delegating: Use the `delegate_task_to_specialist` tool. Specify `agent_role` and `sub_task_prompt`.
 
-class FileBasedLongTermMemory(LongTermMemoryBase):
-    """A simple file-based long-term memory system that stores memories in a JSON file."""
+If the overall task is complete, use the `Terminate` tool."""
 
-    def __init__(
-        self, 
-        workspace_root: str = None, 
-        memory_file_name: str = DEFAULT_MEMORY_FILE,
-        ie_name: str = None  # New optional parameter added here
-    ):
-        """
-        Args:
-            workspace_root: Root directory for memory storage
-            memory_file_name: Name of the memory JSON file
-            ie_name: Optional identifier for the memory instance
-        """
-        self.workspace_root = workspace_root or config.workspace_root
-        self.memory_file_path = os.path.join(self.workspace_root, "memory", memory_file_name)
-        self.ie_name = ie_name  # Store the optional identifier
-        self._ensure_memory_dir_exists()
-        self.memory_data: Dict[str, List[Dict[str, Any]]] = self._load_memory_from_file()
+# Placeholder classes for demonstration purposes
+class Manus:
+    def __init__(self, **kwargs):
+        self.name = kwargs.get("name", "Manus")
+        self.description = kwargs.get("description", "Base Manus class")
+        self.system_prompt = kwargs.get("system_prompt", "")
+        self.next_step_prompt = kwargs.get("next_step_prompt", "")
+        self.tools = ToolCollection([])
+        self.memory = MemoryBase() # Use the placeholder MemoryBase
 
-    def _ensure_memory_dir_exists(self) -> None:
-        """Ensures the directory for storing memory files exists."""
-        memory_dir = os.path.dirname(self.memory_file_path)
-        if not os.path.exists(memory_dir):
-            os.makedirs(memory_dir, exist_ok=True)
-            logger.info(f"Created memory directory: {memory_dir}")
+    async def think(self):
+        # Simulate thinking process
+        print(f"{self.name} is thinking...")
+        await asyncio.sleep(0.1) # Reduced sleep time for faster execution
+        print(f"{self.name} has finished thinking.")
+        return True # Indicate successful thinking
 
-    def _load_memory_from_file(self) -> Dict[str, List[Dict[str, Any]]]:
-        """Loads memory data from the JSON file."""
-        if not os.path.exists(self.memory_file_path):
-            logger.info(f"Memory file not found at {self.memory_file_path}. Initializing empty memory.")
-            return {}
-        try:
-            with open(self.memory_file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                logger.info(f"Successfully loaded memory from {self.memory_file_path}")
-                return data
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Error loading memory from {self.memory_file_path}: {e}. Initializing empty memory.")
-            return {}
-
-    def _save_memory_to_file(self) -> None:
-        """Saves the current memory data to the JSON file."""
-        try:
-            with open(self.memory_file_path, "w", encoding="utf-8") as f:
-                json.dump(self.memory_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Successfully saved memory to {self.memory_file_path}")
-        except IOError as e:
-            logger.error(f"Error saving memory to {self.memory_file_path}: {e}")
-
-    async def add_memory(self, memory_item: Dict[str, Any], category: str = "general") -> None:
-        """Adds an item to the long-term memory under a specific category."""
-        if category not in self.memory_data:
-            self.memory_data[category] = []
-        self.memory_data[category].append(memory_item)
-        self._save_memory_to_file()
-        logger.info(f"Added memory item to category '{category}': {memory_item.get('summary', 'No summary')}")
-
-    async def retrieve_memories(self, query: str, category: str = "general", top_k: int = 5) -> List[Dict[str, Any]]:
-        """Retrieves relevant memories based on a simple keyword query from a specific category."""
-        if category not in self.memory_data:
-            logger.warning(f"Category '{category}' not found in memory.")
-            return []
-
-        relevant_memories = []
-        query_terms = query.lower().split()
-
-        for item in self.memory_data[category]:
-            content_to_search = ""
-            if "content" in item and isinstance(item["content"], str):
-                content_to_search += item["content"].lower()
-            if "summary" in item and isinstance(item["summary"], str):
-                content_to_search += " " + item["summary"].lower()
-            
-            if any(term in content_to_search for term in query_terms):
-                relevant_memories.append(item)
-        
-        retrieved = relevant_memories[-top_k:]
-        logger.info(f"Retrieved {len(retrieved)} memories for query '{query}' from category '{category}'.")
-        return retrieved
-
-    async def clear_category(self, category: str = "general") -> None:
-        """Clears all memories from a specific category."""
-        if category in self.memory_data:
-            del self.memory_data[category]
-            self._save_memory_to_file()
-            logger.info(f"Cleared all memories from category '{category}'.")
+    async def act(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
+        # Simulate action execution
+        print(f"{self.name} is acting with tool: {tool_name} and arguments: {tool_args}")
+        await asyncio.sleep(0.1) # Reduced sleep time for faster execution
+        return f"Action {tool_name} completed successfully."
+    
+    async def _send_event(self, event_type: str, content: Any, source: Optional[str] = None):
+        # This method would typically send events to an event queue or similar mechanism
+        # For this example, we'll just print the event to the console to show it's being called
+        # and add it to a list to simulate a queue for verification purposes.
+        event_data = {
+            "type": event_type,
+            "source": source or self.name,
+            "content": content,
+            "timestamp": datetime.now().isoformat() # Ensure timestamp is always added
+        }
+        # In a real application, this would push to self.event_q if it exists
+        # For testing purposes, we can append to a list on the instance if no queue is provided
+        if hasattr(self, 'event_log'):
+            self.event_log.append(event_data)
         else:
-            logger.warning(f"Category '{category}' not found in memory. Nothing to clear.")
+            self.event_log = [event_data]
+        print(f"Event Sent: {event_data}")
 
-    async def clear_all_memory(self) -> None:
-        """Clears all long-term memory."""
-        self.memory_data = {}
-        self._save_memory_to_file()
-        logger.info("Cleared all long-term memory.")
+class Tool:
+    name: str
+    description: str
+    args_schema: Optional[Type[BaseModel]] = None
+    # Placeholder for dangerous attribute, assuming it's a boolean
+    dangerous: bool = False 
+
+    def __init__(self, name: str, description: str, args_schema: Optional[Type[BaseModel]] = None, dangerous: bool = False):
+        self.name = name
+        self.description = description
+        self.args_schema = args_schema
+        self.dangerous = dangerous
+
+    async def execute(self, **kwargs: Any) -> str:
+        # This method would be overridden by specific tools
+        # For this example, we'll just return a success message
+        return f"Tool {self.name} executed successfully with arguments: {kwargs}"
+
+class ToolCollection:
+    def __init__(self, tools: List[Tool]):
+        self.tools = {tool.name: tool for tool in tools}
+
+    def add_tool(self, tool: Tool):
+        self.tools[tool.name] = tool
+
+    def get_tool(self, name: str) -> Optional[Tool]:
+        return self.tools.get(name)
+
+class MemoryBase:
+    def __init__(self):
+        self.messages = []
+
+    def add_message(self, role: str, content: str):
+        self.messages.append({"role": role, "content": content})
+
+class DelegateTaskArgs(BaseModel):
+    agent_role: str = Field(description="The role of the specialized agent to delegate to (e.g., BrainstormingAgent, CodingAgent, WebSearchAgent).")
+    sub_task_prompt: str = Field(description="The detailed prompt or instructions for the specialized agent to perform the sub-task.")
+
+class DelegateTaskTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="delegate_task_to_specialist",
+            description="Delegates a sub-task to a specialized agent. Provide the agent_role and the sub_task_prompt.",
+            args_schema=DelegateTaskArgs
+        )
+
+    async def execute(self, agent_role: str, sub_task_prompt: str) -> str:
+        # This is a placeholder for the actual delegation logic
+        # In a real application, this would involve creating an instance of the specialized agent
+        # and running its execution logic.
+        # For now, we'll just return a confirmation message.
+        # Adding a print statement to simulate the action for verification
+        print(f"Simulating delegation to {agent_role} with prompt: {sub_task_prompt[:100]}...")
+        await asyncio.sleep(0.1) # Simulate some processing time
+        return f"Successfully delegated task to {agent_role}."
+
+class TerminateTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="Terminate",
+            description="Terminates the current task and provides a final message."
+        )
+
+    async def execute(self, message: str = "Task terminated successfully.") -> str:
+        # In a real application, this might involve cleaning up resources or logging out.
+        print(message)
+        return message
+
+class OrchestratorAgent(Manus):
+    name: str = "OrchestratorAgent"
+    description: str = "Coordinates specialized agents to solve complex tasks."
+    # system_prompt and next_step_prompt are now set in __init__ using the global constants
+
+    def __init__(self, event_q: Optional[queue.Queue] = None, **kwargs: Any):
+        super().__init__(**kwargs)
+        self.event_q = event_q
+        self.system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(directory=os.getcwd()) # Use os.getcwd() for current directory
+        self.next_step_prompt = ORCHESTRATOR_NEXT_STEP_PROMPT
+        self.tools = ToolCollection([
+            DelegateTaskTool(),
+            TerminateTool()
+        ])
+        # Initialize event_log for testing purposes if no queue is provided
+        if not self.event_q:
+            self.event_log = [] # Ensure event_log is initialized for the class instance
+
+        if self.event_q:
+            self.event_q.put({"type": "log", "source": self.name, "content": f"{self.name} initialized.", "timestamp": datetime.now().isoformat()})
+        else:
+            print(f"{self.name} initialized without an event queue.")
+
+    async def run(self, prompt: str, event_q: Optional[queue.Queue] = None) -> None:
+        if event_q:
+            self.event_q = event_q
+        
+        await self._send_event("log", f"Orchestrator received prompt: {prompt}")
+        self.memory.add_message(role="user", content=prompt)
+        
+        # Simplified workflow for demonstration
+        if "search" in prompt.lower():
+            await self._send_event("log", "Simulating web search...")
+            # In a real scenario, this would call a specialized agent for web search.
+            # For this example, we'll just simulate the result.
+            await asyncio.sleep(0.1) # Simulate network delay
+            search_result_message = "Simulated search results: Found information about AI advancements."
+            await self._send_event("message", search_result_message)
+            self.memory.add_message(role="assistant", content=search_result_message)
+        elif "code" in prompt.lower() or "develop" in prompt.lower():
+            await self._send_event("log", "Simulating code generation...")
+            # In a real scenario, this would call a specialized agent for code generation.
+            await asyncio.sleep(0.1) # Simulate coding time
+            code_output_message = "```python\nprint(\"Hello, AI world!\")\n```"
+            await self._send_event("message", code_output_message)
+            self.memory.add_message(role="assistant", content=code_output_message)
+        else:
+            await self._send_event("log", "Orchestrator handling the request directly.")
+            await asyncio.sleep(0.1)
+            response_message = "Orchestrator processed the request directly."
+            await self._send_event("message", response_message)
+            self.memory.add_message(role="assistant", content=response_message)
+
+        # Terminate the task
+        await self._send_event("log", "Orchestrator terminating the task.")
+        final_response = await self.tools.get_tool("Terminate").execute(message="Task completed and terminated by Orchestrator.")
+        await self._send_event("final_result", final_response)
+        await self._send_event("Done", "All operations finished.")
+
+async def main():
+    # This is a basic example of how to run the OrchestratorAgent
+    # In a real application, you might get input from a user interface or other sources
+    initial_prompt = "Find information about the latest AI advancements and then write a short summary."
+
+    # Create a queue for event communication if needed by your application
+    # For this example, we'll use a simple list to store events if no queue is provided to the agent
+    event_q = queue.Queue()
+
+    # Instantiate the OrchestratorAgent
+    # Pass the event_q to the constructor if you want to collect events externally
+    orchestrator = OrchestratorAgent(event_q=event_q)
+    # If you don't pass event_q, events will be printed to console by default as per current _send_event implementation
+    # orchestrator = OrchestratorAgent()
+
+    # Run the OrchestratorAgent with the specified prompt
+    await orchestrator.run(initial_prompt)
+
+    # Print events from the queue to demonstrate they were captured
+    print("\n--- Event Log (from queue) ---")
+    while not event_q.empty():
+        event = event_q.get()
+        # Ensure all event components are present before trying to print them
+        timestamp = event.get("timestamp", "N/A")
+        source = event.get("source", "Unknown Source")
+        content = event.get("content", "No content")
+        print(f"{timestamp} - {source}: {content}")
+
+    print("--- End of script ---")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
