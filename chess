@@ -1,12 +1,11 @@
-# Corrected Python script for OpenManus project
 import asyncio
 import queue
 import os
 from typing import Dict, List, Optional, Any, Type
 from pydantic import BaseModel, Field
-from datetime import datetime # Ensure datetime is imported
+from datetime import datetime
 
-# Define global constants before they are used
+# System prompts
 ORCHESTRATOR_SYSTEM_PROMPT = (
     "You are the Orchestrator Agent for the OpenManus project. "
     "Your primary role is to understand complex user requests, decompose them into manageable sub-tasks, "
@@ -30,7 +29,7 @@ ORCHESTRATOR_NEXT_STEP_PROMPT = """Review the user's current request, your curre
 
 If the overall task is complete, use the `Terminate` tool."""
 
-# Placeholder classes for demonstration purposes
+# Core classes
 class Manus:
     def __init__(self, **kwargs):
         self.name = kwargs.get("name", "Manus")
@@ -38,45 +37,43 @@ class Manus:
         self.system_prompt = kwargs.get("system_prompt", "")
         self.next_step_prompt = kwargs.get("next_step_prompt", "")
         self.tools = ToolCollection([])
-        self.memory = MemoryBase() # Use the placeholder MemoryBase
+        self.memory = MemoryBase()
 
     async def think(self):
-        # Simulate thinking process
         print(f"{self.name} is thinking...")
-        await asyncio.sleep(0.1) # Reduced sleep time for faster execution
+        await asyncio.sleep(0.1)
         print(f"{self.name} has finished thinking.")
-        return True # Indicate successful thinking
+        return True
 
     async def act(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
-        # Simulate action execution
         print(f"{self.name} is acting with tool: {tool_name} and arguments: {tool_args}")
-        await asyncio.sleep(0.1) # Reduced sleep time for faster execution
+        await asyncio.sleep(0.1)
         return f"Action {tool_name} completed successfully."
-    
+
     async def _send_event(self, event_type: str, content: Any, source: Optional[str] = None):
-        # This method would typically send events to an event queue or similar mechanism
-        # For this example, we'll just print the event to the console to show it's being called
-        # and add it to a list to simulate a queue for verification purposes.
         event_data = {
             "type": event_type,
             "source": source or self.name,
             "content": content,
-            "timestamp": datetime.now().isoformat() # Ensure timestamp is always added
+            "timestamp": datetime.now().isoformat()
         }
-        # In a real application, this would push to self.event_q if it exists
-        # For testing purposes, we can append to a list on the instance if no queue is provided
-        if hasattr(self, 'event_log'):
-            self.event_log.append(event_data)
+        if hasattr(self, "event_q") and self.event_q:
+            try:
+                self.event_q.put(event_data)
+            except Exception as e:
+                print(f"[ERROR] Failed to put event: {e}")
+                print(f"Event data: {event_data}")
         else:
-            self.event_log = [event_data]
-        print(f"Event Sent: {event_data}")
+            print(f"Event Sent: {event_data}")
+            if not hasattr(self, "event_log"):
+                self.event_log = []
+            self.event_log.append(event_data)
 
 class Tool:
     name: str
     description: str
     args_schema: Optional[Type[BaseModel]] = None
-    # Placeholder for dangerous attribute, assuming it's a boolean
-    dangerous: bool = False 
+    dangerous: bool = False
 
     def __init__(self, name: str, description: str, args_schema: Optional[Type[BaseModel]] = None, dangerous: bool = False):
         self.name = name
@@ -85,8 +82,6 @@ class Tool:
         self.dangerous = dangerous
 
     async def execute(self, **kwargs: Any) -> str:
-        # This method would be overridden by specific tools
-        # For this example, we'll just return a success message
         return f"Tool {self.name} executed successfully with arguments: {kwargs}"
 
 class ToolCollection:
@@ -119,13 +114,8 @@ class DelegateTaskTool(Tool):
         )
 
     async def execute(self, agent_role: str, sub_task_prompt: str) -> str:
-        # This is a placeholder for the actual delegation logic
-        # In a real application, this would involve creating an instance of the specialized agent
-        # and running its execution logic.
-        # For now, we'll just return a confirmation message.
-        # Adding a print statement to simulate the action for verification
         print(f"Simulating delegation to {agent_role} with prompt: {sub_task_prompt[:100]}...")
-        await asyncio.sleep(0.1) # Simulate some processing time
+        await asyncio.sleep(0.1)
         return f"Successfully delegated task to {agent_role}."
 
 class TerminateTool(Tool):
@@ -136,99 +126,75 @@ class TerminateTool(Tool):
         )
 
     async def execute(self, message: str = "Task terminated successfully.") -> str:
-        # In a real application, this might involve cleaning up resources or logging out.
         print(message)
         return message
 
 class OrchestratorAgent(Manus):
     name: str = "OrchestratorAgent"
     description: str = "Coordinates specialized agents to solve complex tasks."
-    # system_prompt and next_step_prompt are now set in __init__ using the global constants
 
     def __init__(self, event_q: Optional[queue.Queue] = None, **kwargs: Any):
         super().__init__(**kwargs)
         self.event_q = event_q
-        self.system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(directory=os.getcwd()) # Use os.getcwd() for current directory
+        self.system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(directory=os.getcwd())
         self.next_step_prompt = ORCHESTRATOR_NEXT_STEP_PROMPT
         self.tools = ToolCollection([
             DelegateTaskTool(),
             TerminateTool()
         ])
-        # Initialize event_log for testing purposes if no queue is provided
         if not self.event_q:
-            self.event_log = [] # Ensure event_log is initialized for the class instance
-
-        if self.event_q:
-            self.event_q.put({"type": "log", "source": self.name, "content": f"{self.name} initialized.", "timestamp": datetime.now().isoformat()})
-        else:
+            self.event_log = []
             print(f"{self.name} initialized without an event queue.")
+        else:
+            self.event_q.put({
+                "type": "log",
+                "source": self.name,
+                "content": f"{self.name} initialized.",
+                "timestamp": datetime.now().isoformat()
+            })
 
     async def run(self, prompt: str, event_q: Optional[queue.Queue] = None) -> None:
         if event_q:
             self.event_q = event_q
-        
+
         await self._send_event("log", f"Orchestrator received prompt: {prompt}")
         self.memory.add_message(role="user", content=prompt)
-        
-        # Simplified workflow for demonstration
+
         if "search" in prompt.lower():
             await self._send_event("log", "Simulating web search...")
-            # In a real scenario, this would call a specialized agent for web search.
-            # For this example, we'll just simulate the result.
-            await asyncio.sleep(0.1) # Simulate network delay
-            search_result_message = "Simulated search results: Found information about AI advancements."
-            await self._send_event("message", search_result_message)
-            self.memory.add_message(role="assistant", content=search_result_message)
+            await asyncio.sleep(0.1)
+            result = "Simulated search results: Found information about AI advancements."
+            await self._send_event("message", result)
+            self.memory.add_message(role="assistant", content=result)
         elif "code" in prompt.lower() or "develop" in prompt.lower():
             await self._send_event("log", "Simulating code generation...")
-            # In a real scenario, this would call a specialized agent for code generation.
-            await asyncio.sleep(0.1) # Simulate coding time
-            code_output_message = "```python\nprint(\"Hello, AI world!\")\n```"
-            await self._send_event("message", code_output_message)
-            self.memory.add_message(role="assistant", content=code_output_message)
+            await asyncio.sleep(0.1)
+            result = "```python\nprint(\"Hello, AI world!\")\n```"
+            await self._send_event("message", result)
+            self.memory.add_message(role="assistant", content=result)
         else:
             await self._send_event("log", "Orchestrator handling the request directly.")
             await asyncio.sleep(0.1)
-            response_message = "Orchestrator processed the request directly."
-            await self._send_event("message", response_message)
-            self.memory.add_message(role="assistant", content=response_message)
+            result = "Orchestrator processed the request directly."
+            await self._send_event("message", result)
+            self.memory.add_message(role="assistant", content=result)
 
-        # Terminate the task
         await self._send_event("log", "Orchestrator terminating the task.")
-        final_response = await self.tools.get_tool("Terminate").execute(message="Task completed and terminated by Orchestrator.")
-        await self._send_event("final_result", final_response)
+        final_result = await self.tools.get_tool("Terminate").execute(message="Task completed and terminated by Orchestrator.")
+        await self._send_event("final_result", final_result)
         await self._send_event("Done", "All operations finished.")
 
-async def main():
-    # This is a basic example of how to run the OrchestratorAgent
-    # In a real application, you might get input from a user interface or other sources
-    initial_prompt = "Find information about the latest AI advancements and then write a short summary."
-
-    # Create a queue for event communication if needed by your application
-    # For this example, we'll use a simple list to store events if no queue is provided to the agent
-    event_q = queue.Queue()
-
-    # Instantiate the OrchestratorAgent
-    # Pass the event_q to the constructor if you want to collect events externally
-    orchestrator = OrchestratorAgent(event_q=event_q)
-    # If you don't pass event_q, events will be printed to console by default as per current _send_event implementation
-    # orchestrator = OrchestratorAgent()
-
-    # Run the OrchestratorAgent with the specified prompt
-    await orchestrator.run(initial_prompt)
-
-    # Print events from the queue to demonstrate they were captured
-    print("\n--- Event Log (from queue) ---")
-    while not event_q.empty():
-        event = event_q.get()
-        # Ensure all event components are present before trying to print them
-        timestamp = event.get("timestamp", "N/A")
-        source = event.get("source", "Unknown Source")
-        content = event.get("content", "No content")
-        print(f"{timestamp} - {source}: {content}")
-
-    print("--- End of script ---")
-
+# To test manually
 if __name__ == "__main__":
-    asyncio.run(main())
+    async def main():
+        initial_prompt = "Find information about the latest AI advancements and then write a short summary."
+        event_q = queue.Queue()
+        agent = OrchestratorAgent(event_q=event_q)
+        await agent.run(initial_prompt)
 
+        print("\n--- Event Log ---")
+        while not event_q.empty():
+            event = event_q.get()
+            print(f"{event.get('timestamp')} - {event.get('source')}: {event.get('content')}")
+
+    asyncio.run(main())
